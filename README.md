@@ -92,23 +92,17 @@ All configurations share the same feasibility thresholds:
 solidus > 2473 K, density < 9.0 g cm⁻³, yield strength > 700 MPa,
 Pugh ratio > 2.5, and single-phase BCC at 600 °C.
 
-## Sanitising the design space for sharing
+## Sanitised design space
 
-The raw `design_space.xlsx` file contains Thermo-Calc derived fields. Before
-distributing it externally, run:
+For distribution we ship `design_space_sanitized.csv`, which mirrors the schema
+expected by the campaign scripts while obscuring Thermo-Calc outputs:
 
-```bash
-python sanitize_design_space.py --input design_space.xlsx --output design_space_sanitized.csv
-```
+1. Elemental fraction columns have been replaced with anonymous placeholders
+   (`element_01`, …).
+2. All columns beginning with `PROP` or `EQUIL` are min–max scaled into `[0, 1]`.
 
-This will:
-
-1. Rename elemental columns to anonymous placeholders (`element_01`, …).
-2. Min–max scale every column whose name starts with `PROP` or `EQUIL` into the
-   `[0, 1]` range.
-
-The resulting CSV preserves the structure expected by the campaign scripts
-while obscuring direct Thermo-Calc outputs.
+If you have access to the original `design_space.xlsx` you can regenerate the
+sanitised file locally, but end users only need the CSV provided in the repo.
 
 ## Tips
 
