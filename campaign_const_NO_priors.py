@@ -23,7 +23,7 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Tuple, Iterable, Optional, List, Dict
+from typing import Tuple, Iterable, Optional, List
 
 import numpy as np
 import pandas as pd
@@ -298,6 +298,18 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
     print(f"Running campaign seed={seed}")
 
     splice = load_design_space()
+    scaled_space = float(splice["PROP 25C Density (g/cm3)"].max(skipna=True)) <= 1.5
+    global DENSITY_THRESH, YS_THRESH, PUGH_THRESH, ST_THRESH
+    if scaled_space:
+        DENSITY_THRESH = 0.218912147251372
+        YS_THRESH = 0.27326687068841815
+        PUGH_THRESH = 0.34208243243243236
+        ST_THRESH = 0.3340611001897914
+    else:
+        DENSITY_THRESH = 9.0
+        YS_THRESH = 700.0
+        PUGH_THRESH = 2.5
+        ST_THRESH = 2200.0 + 273.0
     df = prepare_dataframe(splice)
 
     truth_pass = (

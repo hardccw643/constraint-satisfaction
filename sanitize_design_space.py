@@ -1,31 +1,26 @@
 #!/usr/bin/env python3
 """
-Produce a shareable design-space CSV containing only the columns required by
-the active-learning campaigns in this repository.
+Create a shareable design-space CSV containing only the fields required by the
+campaign scripts while obscuring absolute Thermo-Calc outputs.
 
-Operations:
-1. Keep only the elemental fractions used by the models (Nb, Mo, Ta, V, W, Cr).
-   These are renamed to anonymised placeholders element_01 ... element_06.
-2. Retain the objective/prior columns consumed by the scripts.
-3. Preserve all phase-fraction columns that include both "600C" and "BCC"
-   (used to build the single-phase BCC indicator).
-4. Min-max scale the prior columns as well as any column with prefix PROP/EQUIL.
-5. Emit a JSON file containing the scaled constraint thresholds for downstream use.
-
-Usage:
-    python sanitize_design_space.py \
-        --input design_space.xlsx \
-        --output design_space_sanitized.csv \
-        --threshold-output constraints_scaled.json
+Steps:
+1. Keep the elemental fractions used by the models (Nb, Mo, Ta, V, W, Cr) and
+   rename them to element_01 ... element_06.
+2. Retain the objective/prior columns and 600 °C BCC phase fractions that the
+   scripts rely on.
+3. Min–max scale every column that begins with PROP or EQUIL, as well as the
+   prior columns.
+4. Apply ±1% multiplicative jitter to every numeric column for additional
+   obfuscation (values are clipped to stay within sensible bounds).
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Sequence, Tuple
 
+import numpy as np
 import pandas as pd
 
 ELEMENT_COLUMNS: Sequence[str] = ("Nb", "Mo", "Ta", "V", "W", "Cr")
@@ -55,18 +50,8 @@ ADDITIONAL_SCALE_COLUMNS: Sequence[str] = (
 
 PREFIXES_TO_SCALE: Sequence[str] = ("PROP", "EQUIL")
 
-THRESHOLD_VALUES: Dict[str, float] = {
-    "PROP 25C Density (g/cm3)": 9.0,
-    "YS 600 C PRIOR": 700.0,
-    "Pugh_Ratio_PRIOR": 2.5,
-    "PROP ST (K)": 2200.0 + 273.0,
-    "VEC": 6.87,
-    "VEC Avg": 6.87,
-}
-
 DEFAULT_INPUT = Path("design_space.xlsx")
 DEFAULT_OUTPUT = Path("design_space_sanitized.csv")
-DEFAULT_THRESHOLDS_OUTPUT = Path("constraints_scaled.json")
 
 
 def load_design_space(path: Path) -> pd.DataFrame:
@@ -91,13 +76,13 @@ def select_columns(df: pd.DataFrame) -> pd.DataFrame:
     bcc_cols = [c for c in df.columns if "600C" in c and "BCC" in c]
     keep_cols.extend([c for c in bcc_cols if c not in keep_cols])
 
-    missing = [c for c in ELEMENT_COLUMNS if c not in df.columns]
-    if missing:
-        raise ValueError(f"Missing elemental columns: {missing}")
+    missing_elements = [c for c in ELEMENT_COLUMNS if c not in df.columns]
+    if missing_elements:
+        raise ValueError(f"Missing elemental columns: {missing_elements}")
 
-    required_missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
-    if required_missing:
-        raise ValueError(f"Missing required columns: {required_missing}")
+    missing_required = [c for c in REQUIRED_COLUMNS if c not in df.columns]
+    if missing_required:
+        raise ValueError(f"Missing required columns: {missing_required}")
 
     if "VEC" in df.columns and "VEC" not in keep_cols:
         keep_cols.append("VEC")
@@ -121,11 +106,10 @@ def scale_columns(
     df: pd.DataFrame,
     prefixes: Iterable[str],
     extra: Iterable[str],
-) -> Tuple[pd.DataFrame, Dict[str, Tuple[float, float]]]:
+) -> pd.DataFrame:
     df_scaled = df.copy()
     prefixes_lower = tuple(p.lower() for p in prefixes)
     extra_set = set(extra)
-    min_max: Dict[str, Tuple[float, float]] = {}
 
     for col in df_scaled.columns:
         lower = col.lower()
@@ -137,36 +121,41 @@ def scale_columns(
         col_max = series.max(skipna=True)
         if pd.isna(col_min) or pd.isna(col_max) or col_max == col_min:
             df_scaled[col] = 0.0
-            min_max[col] = (float(col_min if pd.notna(col_min) else 0.0), float(col_max if pd.notna(col_max) else 0.0))
         else:
             df_scaled[col] = (series - col_min) / (col_max - col_min)
-            min_max[col] = (float(col_min), float(col_max))
-    return df_scaled, min_max
+    return df_scaled
 
 
-def sanitize(input_path: Path, output_path: Path, thresholds_output: Path) -> None:
+def apply_jitter(df: pd.DataFrame, amplitude: float = 0.01, seed: int = 2025) -> pd.DataFrame:
+    df_jittered = df.copy()
+    numeric_cols = df_jittered.select_dtypes(include=["number"]).columns
+    if numeric_cols.empty:
+        return df_jittered
+
+    rng = np.random.default_rng(seed)
+    noise = rng.uniform(-amplitude, amplitude, size=(df_jittered.shape[0], len(numeric_cols)))
+    values = df_jittered[numeric_cols].to_numpy(dtype=float)
+    values *= (1.0 + noise)
+    values = np.clip(values, 0.0, None)
+
+    scaled_prefixes = tuple(p.lower() for p in PREFIXES_TO_SCALE)
+    for idx, col in enumerate(numeric_cols):
+        lower = col.lower()
+        if lower.startswith(scaled_prefixes) or col in ADDITIONAL_SCALE_COLUMNS:
+            values[:, idx] = np.clip(values[:, idx], 0.0, 1.0)
+
+    df_jittered[numeric_cols] = values
+    return df_jittered
+
+
+def sanitize(input_path: Path, output_path: Path) -> None:
     df = load_design_space(input_path)
     df = select_columns(df)
     df = rename_element_columns(df)
-    df, min_max = scale_columns(df, PREFIXES_TO_SCALE, ADDITIONAL_SCALE_COLUMNS)
+    df = scale_columns(df, PREFIXES_TO_SCALE, ADDITIONAL_SCALE_COLUMNS)
+    df = apply_jitter(df)
     df.to_csv(output_path, index=False)
     print(f"Sanitized dataset saved to {output_path} ({df.shape[0]} rows, {df.shape[1]} columns).")
-
-    thresholds_scaled: Dict[str, float] = {}
-    for col, value in THRESHOLD_VALUES.items():
-        if col not in df.columns or col not in min_max:
-            continue
-        cmin, cmax = min_max[col]
-        if cmax == cmin:
-            scaled = 0.0
-        else:
-            scaled = (value - cmin) / (cmax - cmin)
-        thresholds_scaled[col] = max(0.0, min(1.0, scaled))
-
-    if thresholds_scaled:
-        with thresholds_output.open("w", encoding="utf-8") as f:
-            json.dump(thresholds_scaled, f, indent=2, sort_keys=True)
-        print(f"Scaled constraint thresholds written to {thresholds_output}.")
 
 
 def main() -> None:
@@ -175,10 +164,8 @@ def main() -> None:
                         help="Input design-space file (.xlsx or .csv).")
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
                         help="Output CSV path (default: design_space_sanitized.csv).")
-    parser.add_argument("--threshold-output", type=Path, default=DEFAULT_THRESHOLDS_OUTPUT,
-                        help="JSON file to store scaled constraint thresholds.")
     args = parser.parse_args()
-    sanitize(args.input, args.output, args.threshold_output)
+    sanitize(args.input, args.output)
 
 
 if __name__ == "__main__":

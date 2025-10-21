@@ -99,14 +99,13 @@ expected by the campaign scripts while obscuring Thermo-Calc outputs:
 
 1. Elemental fraction columns have been replaced with anonymous placeholders
    (`element_01`, …).
-2. All columns beginning with `PROP` or `EQUIL` are min–max scaled into `[0, 1]`.
-3. Prior columns (`YS 600 C PRIOR`, `YS 25C PRIOR`, etc.) are scaled into
-   `[0, 1]`, and `constraints_scaled.json` lists the corresponding thresholds
-   (density, YS, Pugh, solidus, VEC) in the scaled space.
+2. All columns beginning with `PROP` or `EQUIL`, as well as the prior columns,
+   are min–max scaled into `[0, 1]`.
+3. Every numeric column receives a ±1 % multiplicative jitter (clipped to
+   sensible bounds) to prevent reconstruction of the exact Thermo-Calc values.
 
 If you have access to the original `design_space.xlsx` you can regenerate the
-sanitised file and threshold JSON locally, but end users only need the files
-provided in the repo.
+sanitised file locally, but end users only need the CSV shipped here.
 
 ## Tips
 

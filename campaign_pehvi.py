@@ -30,7 +30,7 @@ import os
 import json
 import time
 from dataclasses import dataclass
-from typing import Tuple, Iterable, Optional, Dict
+from typing import Tuple, Iterable, Optional
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 
@@ -69,8 +69,6 @@ ST_THRESH = 2200 + 273
 DENSITY_THRESH = 9.0
 YS_THRESH = 700
 PUGH_THRESH = 2.5
-
-THRESHOLD_FILE = "constraints_scaled.json"
 
 REF_ST = 0
 REF_DENSITY = 30
@@ -347,6 +345,20 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
 
     # Load and prep
     splice = load_design_space()
+    scaled_space = float(splice["PROP 25C Density (g/cm3)"].max(skipna=True)) <= 1.5
+    global DENSITY_THRESH, YS_THRESH, PUGH_THRESH, ST_THRESH, VEC_THRESHOLD
+    if scaled_space:
+        DENSITY_THRESH = 0.218912147251372
+        YS_THRESH = 0.27326687068841815
+        PUGH_THRESH = 0.34208243243243236
+        ST_THRESH = 0.3340611001897914
+        VEC_THRESHOLD = 1.0
+    else:
+        DENSITY_THRESH = 9.0
+        YS_THRESH = 700.0
+        PUGH_THRESH = 2.5
+        ST_THRESH = 2200.0 + 273.0
+        VEC_THRESHOLD = 6.87
     df = prepare_dataframe(splice)
 
     # Ground-truth labels INCLUDING BCC requirement
