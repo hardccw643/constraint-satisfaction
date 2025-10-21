@@ -92,6 +92,24 @@ All configurations share the same feasibility thresholds:
 solidus > 2473 K, density < 9.0 g cm⁻³, yield strength > 700 MPa,
 Pugh ratio > 2.5, and single-phase BCC at 600 °C.
 
+## Sanitising the design space for sharing
+
+The raw `design_space.xlsx` file contains Thermo-Calc derived fields. Before
+distributing it externally, run:
+
+```bash
+python sanitize_design_space.py --input design_space.xlsx --output design_space_sanitized.csv
+```
+
+This will:
+
+1. Rename elemental columns to anonymous placeholders (`element_01`, …).
+2. Min–max scale every column whose name starts with `PROP` or `EQUIL` into the
+   `[0, 1]` range.
+
+The resulting CSV preserves the structure expected by the campaign scripts
+while obscuring direct Thermo-Calc outputs.
+
 ## Tips
 
 - The scripts cap BLAS/OpenMP threads to 1 for reproducibility. Remove the
