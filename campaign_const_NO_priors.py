@@ -2,7 +2,7 @@
 """
 Feasibility-first active learning (constraints-first) with priors enabled.
 
-- Acquisition: acq_full = Total_Prob_With_BCC
+- Acquisition: acq_full = Total_Prob_With_BCC + U01
 - Logs fixed-range scaled HV (AFTER pick) to keep apples-to-apples with MOBO.
 - Flags if the chosen point is Pareto on the measured set after adding it.
 - Plots:
@@ -72,20 +72,6 @@ BCC_SINGLE_VALUE = 5.0
 
 # Will hold dataset-fixed ranges for scaled HV
 FIXED_RANGES: Optional[np.ndarray] = None  # (4,)
-
-DATA_CANDIDATES = ("design_space.xlsx", "design_space.csv")
-
-
-def load_design_space() -> pd.DataFrame:
-    """Load the design space from design_space.(xlsx|csv)."""
-    for path in DATA_CANDIDATES:
-        if os.path.exists(path):
-            if path.lower().endswith(".xlsx"):
-                return pd.read_excel(path)
-            return pd.read_csv(path)
-    raise FileNotFoundError(
-        "Expected design_space.xlsx or design_space.csv in this directory."
-    )
 
 # =================== Hypervolume (EXACT; NOT EHVI) ===================
 
@@ -227,7 +213,6 @@ def prepare_dataframe(splice: pd.DataFrame) -> pd.DataFrame:
         #raise ValueError("Neither 'VEC' nor 'VEC Avg' found in splice columns.")
     #df["VEC (BCC Prior)"] = np.where(splice[vec_col] >= threshold, 1.0, -1.0)
     df["VEC (BCC Prior)"] = 0.0
-
     # ---- Elemental fractions (assumed columns 6..12 in splice) ----
     df = df.merge(splice.iloc[:, 6:12], left_index=True, right_index=True)
 
@@ -297,19 +282,7 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
 
     print(f"Running campaign seed={seed}")
 
-    splice = load_design_space()
-    scaled_space = float(splice["PROP 25C Density (g/cm3)"].max(skipna=True)) <= 1.5
-    global DENSITY_THRESH, YS_THRESH, PUGH_THRESH, ST_THRESH
-    if scaled_space:
-        DENSITY_THRESH = 0.218912147251372
-        YS_THRESH = 0.27326687068841815
-        PUGH_THRESH = 0.34208243243243236
-        ST_THRESH = 0.3340611001897914
-    else:
-        DENSITY_THRESH = 9.0
-        YS_THRESH = 700.0
-        PUGH_THRESH = 2.5
-        ST_THRESH = 2200.0 + 273.0
+    splice = pd.read_csv("EQUIL_STITCH.csv")
     df = prepare_dataframe(splice)
 
     truth_pass = (
@@ -366,6 +339,7 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
 
     measured_indices = set(initial_idx.tolist())
     unmeasurable_indices = set()
+    t0 = time.time()
 
     for it in range(iterations):
         it0 = time.time()
@@ -416,6 +390,35 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
         df["sd_Pugh"]      = sd_pug
         df["sd_BCC"]       = sd_bcc
 
+        # ---------- Uncertainty → [0,1] per GP, sum, then min–max to [0,1] ----------
+        shifted_full = means_full - REF_POINT
+        smin = np.min(shifted_full, axis=0)
+        smax = np.max(shifted_full, axis=0)
+        ranges = np.maximum(smax - smin, EPS)          # (4,)
+
+        sigma_unitless = sigmas_full / ranges          # (N,4)
+        sigma_dim_max = np.maximum(np.max(sigma_unitless, axis=0), EPS)
+        sigma_obj01 = sigma_unitless / sigma_dim_max   # (N,4) in [0,1]
+
+        bcc01 = np.maximum(sd_bcc, EPS) / (np.max(sd_bcc) + EPS)  # (N,) in [0,1]
+
+        sum_uncert = sigma_obj01.sum(axis=1) + bcc01               # (N,) approx [0,5]
+        sum_min, sum_max = float(np.min(sum_uncert)), float(np.max(sum_uncert))
+        U01 = (sum_uncert - sum_min) / (max(sum_max - sum_min, EPS))  # (N,) ∈ [0,1]
+
+        # Keep diagnostics
+        df["U_ObjDims01_sum"] = sigma_obj01.sum(axis=1)
+        df["U_BCC01"] = bcc01
+        df["U01"] = U01
+
+        # --- Compatibility shim for legacy names used in logging/plots ---
+        obj_uncert  = np.mean(sigma_obj01, axis=1)                       # (N,) in [0,1]
+        bcc_sd_norm = bcc01                                               # (N,) in [0,1]
+        U           = U01                                                 # (N,) in [0,1]
+        df["U_ObjScaledMean"] = obj_uncert
+        df["U_BCC_SDNorm"]    = bcc_sd_norm
+        df["U_Combined"]      = U
+
         # ---------- Feasibility probabilities ----------
         p_den  = norm.cdf((DENSITY_THRESH - mu_den) / sd_den)         # P(Density < thresh)
         p_ys   = 1.0 - norm.cdf((YS_THRESH   - mu_ys)  / sd_ys)       # P(YS > thresh)
@@ -432,7 +435,7 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
         df["Total_Prob_With_BCC"] = total_prob_with_bcc
 
         # --------- Acquisition (feasibility-first) ----------
-        acq_full = total_prob_with_bcc
+        acq_full = total_prob_with_bcc + U01 # Balance exploitation and exploration
         df["Acq"] = acq_full
         df["AcqNorm"] = acq_full
         df["AcqPlotVal"] = acq_full
@@ -499,10 +502,10 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
             chosen_is_pareto_measured = False
             pareto_obs_after = pareto_obs_before  # no change
 
-        # Remove from pool
+        # Remove from pool regardless
         df_pool = df_pool.drop(index=next_idx)
 
-         # ---------- Fixed-range scaled HV (AFTER pick) ----------
+        # ---------- Fixed-range scaled HV (AFTER pick) ----------
         hv_scaled_fixed_after = hypervolume_in_scaled_space(pareto_obs_after, REF_POINT, FIXED_RANGES)
 
         # ---------- Log row (single CSV, updated) ----------
