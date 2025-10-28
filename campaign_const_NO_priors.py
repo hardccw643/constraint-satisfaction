@@ -73,6 +73,19 @@ BCC_SINGLE_VALUE = 5.0
 # Will hold dataset-fixed ranges for scaled HV
 FIXED_RANGES: Optional[np.ndarray] = None  # (4,)
 
+DATA_CANDIDATES = ("design_space.xlsx", "design_space.csv")
+
+def load_design_space() -> pd.DataFrame:
+    """Load the design space from design_space.(xlsx|csv)."""
+    for path in DATA_CANDIDATES:
+        if os.path.exists(path):
+            if path.lower().endswith(".xlsx"):
+                return pd.read_excel(path)
+            return pd.read_csv(path)
+    raise FileNotFoundError(
+        "Expected design_space.xlsx or design_space.csv in this directory."
+    )
+
 # =================== Hypervolume (EXACT; NOT EHVI) ===================
 
 def _pareto_filter_non_dominated(P: np.ndarray) -> np.ndarray:
@@ -282,8 +295,23 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
     print(f"Running campaign seed={seed}")
-
-    splice = pd.read_csv("EQUIL_STITCH.csv")
+ 
+      # Load and prep
+    splice = load_design_space()
+    scaled_space = float(splice["PROP 25C Density (g/cm3)"].max(skipna=True)) <= 1.5
+    global DENSITY_THRESH, YS_THRESH, PUGH_THRESH, ST_THRESH, VEC_THRESHOLD
+    if scaled_space:
+        DENSITY_THRESH = 0.218912147251372
+        YS_THRESH = 0.27326687068841815
+        PUGH_THRESH = 0.34208243243243236
+        ST_THRESH = 0.3340611001897914
+        VEC_THRESHOLD = 1.0
+    else:
+        DENSITY_THRESH = 9.0
+        YS_THRESH = 700.0
+        PUGH_THRESH = 2.5
+        ST_THRESH = 2200.0 + 273.0
+        VEC_THRESHOLD = 6.87
     df = prepare_dataframe(splice)
 
     truth_pass = (
@@ -606,3 +634,4 @@ if __name__ == "__main__":
             s = fut.result()
             print(f"[main] seed {s} finished.")
     print("[main] All seeds done.")
+
