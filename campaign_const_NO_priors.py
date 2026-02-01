@@ -539,21 +539,21 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
             "Iteration": it,
             "ChosenIndex": int(next_idx),
             "Acquisition": float(acq_full[next_idx]),
-            "Pred_ProbWithBCC": float(total_prob_with_bcc[next_idx]),
-            "Pred_Class(>0.5 incl. BCC)": int(pred_labels_full[next_idx]),
+            "Pred_Prob_With_BCC": float(total_prob_with_bcc[next_idx]),
+            "Pred_Class_ProbGT0p5_InclBCC": int(pred_labels_full[next_idx]),
             "Observed_Phase": float(df.loc[next_idx, "600C BCC Total"]),
-            "MeasuredObjectives(BCC single)": int(measured_flag),
+            "MeasuredObjectives_BCCSingle": int(measured_flag),
             "CumulativeMeasured": len(measured_indices),
             "CumulativePhaseOnly": len(unmeasurable_indices),
             "PoolRemaining": int(df_pool.shape[0]),
 
             # NEW: Pareto flag and fixed-scale HV (AFTER pick)
-            "ChosenIsParetoMeasured": "Yes" if chosen_is_pareto_measured else "No",
-            "HypervolumeScaledFixedRange": float(hv_scaled_fixed_after),
+            "ChosenIsPareto_Measured": "Yes" if chosen_is_pareto_measured else "No",
+            "Hypervolume_Scaled_FixedRange": float(hv_scaled_fixed_after),
 
             # Raw HV (BEFORE pick)
             "Hypervolume": float(hv_raw_before),
-            "HypervolumeRawGain": float(hv_raw_gain),
+            "Hypervolume_Raw_Gain": float(hv_raw_gain),
             "HypervolumeEstimate": float(hv_raw_before),
             "TrueParetoCount": true_pareto_count,
 
@@ -572,8 +572,8 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
             "TrueMeasPass_Pugh":           n_true_meas_pass_pugh,
             "TrueMeasPass_ST":             n_true_meas_pass_st,
             "TrueMeasPass_BCC":            n_true_meas_pass_bcc,
-            "TrueMeasPass_All_NoBCC":      n_true_meas_pass_all_nbcc,
-            "TrueMeasPass_All_WithBCC":    n_true_meas_pass_all_wbcc,
+            "TrueMeasPass_All_No_BCC":     n_true_meas_pass_all_nbcc,
+            "TrueMeasPass_All_With_BCC":   n_true_meas_pass_all_wbcc,
 
             # Fixed scaling components (for reproducibility)
             "FixedScale_ST": float(FIXED_RANGES[0]),
