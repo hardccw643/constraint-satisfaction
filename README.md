@@ -59,10 +59,47 @@ python campaign_const_w_priors.py
 ```
 
 By default each script launches many seeds in parallel using
-`ProcessPoolExecutor`. If you only need a single trajectory, edit the `seeds`,
-`iterations`, and `workers` variables in the `__main__` block at the bottom of
-the script before running it. (For quick checks we typically set
-`seeds = [0]`, `iterations = 30`, `workers = 1`.)
+`ProcessPoolExecutor`. You can override this with the CLI options below.
+
+## CLI usage
+
+All `campaign_*.py` scripts accept the same CLI options:
+
+```bash
+# Single seed, shorter run
+python campaign_const_w_priors.py --seeds 0 --iterations 30 --workers 1
+
+# Multiple seeds (comma list and ranges both supported)
+python campaign_const_NO_priors.py --seeds 1,3,5-8 --iterations 50 --workers 6
+
+# Explicit data path and output locations
+python campaign_pehvi.py --data-path /path/to/design_space.csv \
+  --results-dir results_opt --plots-dir plots
+```
+
+Common flags:
+- `--seeds` supports comma-separated values and ranges (e.g. `1,2,5-10`).
+- `--iterations`, `--workers` control campaign length and parallelism.
+- `--data-path` overrides the default `design_space.xlsx`/`.csv` lookup.
+- `--results-dir`, `--plots-dir` change output locations.
+- `--density-thresh`, `--ys-thresh`, `--pugh-thresh`, `--st-thresh`, `--vec-thresh`
+  override feasibility thresholds (otherwise auto-detected for scaled vs raw data).
+
+`campaign_pehvi.py` adds:
+- `--fixed-range-scope {ALL,BCC_ONLY}` to control fixed-range HV scaling
+  (default `ALL`, affects reported HV only).
+
+Original defaults (before CLI overrides):
+- `--seeds`: `1-200`
+- `--iterations`: `100`
+- `--workers`: `25`
+- `--data-path`: auto-detect `design_space.xlsx` or `design_space.csv` in the repo
+- `--results-dir`: `results_const_prior` / `results_const_no_prior` / `results_opt`
+- `--plots-dir`: `plots_seed_###` subfolders in the current working directory
+- Raw-data thresholds: solidus > 2473 K, density < 9.0 g cm⁻³, yield strength > 700 MPa,
+  Pugh ratio > 2.5, VEC >= 6.87
+- Scaled-data thresholds (auto-detected): solidus > 0.3340611, density < 0.2189121,
+  yield strength > 0.2732669, Pugh ratio > 0.3420824, VEC >= 1.0
 
 ## Outputs
 

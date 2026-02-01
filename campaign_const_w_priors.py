@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import time
+import argparse
 from dataclasses import dataclass
 from typing import Tuple, Iterable, Optional, List
 
@@ -47,12 +48,19 @@ RESULTS_DIR = "results_const_prior"
 PLOTS_DIR = "results_const_prior"           # overridden per-seed by _run_seed
 PLOT_PREFIX = "affine_progress_prior"       # overridden per-seed by _run_seed
 PRED_PLOT_PREFIX = "affine_pred_prior"      # overridden per-seed by _run_seed
+PLOTS_BASE_DIR = "."
 
-# Feasibility thresholds
-ST_THRESH = 2200 + 273  # K
-DENSITY_THRESH = 9.0    # g/cm^3 (must be <)
-YS_THRESH = 700         # MPa      (must be >)
-PUGH_THRESH = 2.5       #          (must be >)
+# Feasibility thresholds (defaults; overridden per dataset or CLI)
+DEFAULT_ST_THRESH = 2200 + 273  # K
+DEFAULT_DENSITY_THRESH = 9.0    # g/cm^3 (must be <)
+DEFAULT_YS_THRESH = 700         # MPa      (must be >)
+DEFAULT_PUGH_THRESH = 2.5       #          (must be >)
+DEFAULT_VEC_THRESHOLD = 6.87
+ST_THRESH: Optional[float] = None
+DENSITY_THRESH: Optional[float] = None
+YS_THRESH: Optional[float] = None
+PUGH_THRESH: Optional[float] = None
+VEC_THRESHOLD: Optional[float] = None
 
 # Reference point r in the *maximize* space [ST, -Density, YS, Pugh]
 REF_ST = 0
@@ -75,10 +83,18 @@ BCC_SINGLE_VALUE = 5.0
 FIXED_RANGES: Optional[np.ndarray] = None  # (4,)
 
 DATA_CANDIDATES = ("design_space.xlsx", "design_space.csv")
+DATA_PATH: Optional[str] = None
 
 
-def load_design_space() -> pd.DataFrame:
+def load_design_space(path: Optional[str] = None) -> pd.DataFrame:
     """Load the design space from design_space.(xlsx|csv)."""
+    path = path or DATA_PATH
+    if path:
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Design space file not found: {path}")
+        if path.lower().endswith(".xlsx"):
+            return pd.read_excel(path)
+        return pd.read_csv(path)
     for path in DATA_CANDIDATES:
         if os.path.exists(path):
             if path.lower().endswith(".xlsx"):
@@ -218,11 +234,10 @@ def prepare_dataframe(splice: pd.DataFrame) -> pd.DataFrame:
     df["600C BCC Total"] = np.where(df["600C BCC Total"] > 0.99, 5.0, -5.0)
 
     #VEC prior → latent ±5 with threshold 6.87 (use 'VEC' then fallback to 'VEC Avg')
-    threshold = 6.87
     vec_col = "VEC" if "VEC" in splice.columns else ("VEC Avg" if "VEC Avg" in splice.columns else None)
     if vec_col is None:
         raise ValueError("Neither 'VEC' nor 'VEC Avg' found in splice columns.")
-    df["VEC (BCC Prior)"] = np.where(splice[vec_col] >= threshold, 1.0, -1.0)
+    df["VEC (BCC Prior)"] = np.where(splice[vec_col] >= VEC_THRESHOLD, 1.0, -1.0)
 
     # ---- Elemental fractions 
     missing_cols = [c for c in ELEM_COLS if c not in splice.columns]
@@ -302,17 +317,17 @@ def run_campaign(seed: int = 0, iterations: int = 100) -> None:
     scaled_space = float(splice["PROP 25C Density (g/cm3)"].max(skipna=True)) <= 1.5
     global DENSITY_THRESH, YS_THRESH, PUGH_THRESH, ST_THRESH, VEC_THRESHOLD
     if scaled_space:
-        DENSITY_THRESH = 0.218912147251372
-        YS_THRESH = 0.27326687068841815
-        PUGH_THRESH = 0.34208243243243236
-        ST_THRESH = 0.3340611001897914
-        VEC_THRESHOLD = 1.0
+        DENSITY_THRESH = 0.218912147251372 if DENSITY_THRESH is None else DENSITY_THRESH
+        YS_THRESH = 0.27326687068841815 if YS_THRESH is None else YS_THRESH
+        PUGH_THRESH = 0.34208243243243236 if PUGH_THRESH is None else PUGH_THRESH
+        ST_THRESH = 0.3340611001897914 if ST_THRESH is None else ST_THRESH
+        VEC_THRESHOLD = 1.0 if VEC_THRESHOLD is None else VEC_THRESHOLD
     else:
-        DENSITY_THRESH = 9.0
-        YS_THRESH = 700.0
-        PUGH_THRESH = 2.5
-        ST_THRESH = 2200.0 + 273.0
-        VEC_THRESHOLD = 6.87
+        DENSITY_THRESH = DEFAULT_DENSITY_THRESH if DENSITY_THRESH is None else DENSITY_THRESH
+        YS_THRESH = DEFAULT_YS_THRESH if YS_THRESH is None else YS_THRESH
+        PUGH_THRESH = DEFAULT_PUGH_THRESH if PUGH_THRESH is None else PUGH_THRESH
+        ST_THRESH = DEFAULT_ST_THRESH if ST_THRESH is None else ST_THRESH
+        VEC_THRESHOLD = DEFAULT_VEC_THRESHOLD if VEC_THRESHOLD is None else VEC_THRESHOLD
     df = prepare_dataframe(splice)
 
     truth_pass = (
@@ -602,7 +617,7 @@ def _run_seed(seed: int, iterations: int = 100) -> int:
     os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
     os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
-    seed_plot_dir = os.path.join(".", f"plots_seed_{seed:03d}")
+    seed_plot_dir = os.path.join(PLOTS_BASE_DIR, f"plots_seed_{seed:03d}")
     os.makedirs(seed_plot_dir, exist_ok=True)
 
     g = globals()
@@ -618,11 +633,67 @@ def _run_seed(seed: int, iterations: int = 100) -> int:
     run_campaign(seed=seed, iterations=iterations)
     return seed
 
-if __name__ == "__main__":
-    # Adjust seeds/iterations/workers as needed
-    seeds = list(range(1, 200+1))   # single seed by default
-    iterations = 100
-    workers = 25
+def _parse_seed_list(spec: str) -> List[int]:
+    seeds: List[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start_s, end_s = part.split("-", 1)
+            start = int(start_s.strip())
+            end = int(end_s.strip())
+            step = 1 if end >= start else -1
+            seeds.extend(list(range(start, end + step, step)))
+        else:
+            seeds.append(int(part))
+    return seeds
+
+def _configure_from_args(args: argparse.Namespace) -> tuple[list[int], int, int]:
+    global RESULTS_DIR, PLOTS_BASE_DIR, DATA_PATH
+    global DENSITY_THRESH, YS_THRESH, PUGH_THRESH, ST_THRESH, VEC_THRESHOLD
+
+    if args.results_dir:
+        RESULTS_DIR = args.results_dir
+    if args.plots_dir:
+        PLOTS_BASE_DIR = args.plots_dir
+    if args.data_path:
+        DATA_PATH = args.data_path
+
+    DENSITY_THRESH = args.density_thresh
+    YS_THRESH = args.ys_thresh
+    PUGH_THRESH = args.pugh_thresh
+    ST_THRESH = args.st_thresh
+    VEC_THRESHOLD = args.vec_thresh
+
+    default_seeds = list(range(1, 200 + 1))
+    seeds = _parse_seed_list(args.seeds) if args.seeds else default_seeds
+    iterations = args.iterations if args.iterations is not None else 100
+    workers = args.workers if args.workers is not None else 25
+    return seeds, iterations, workers
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Constraint-satisfaction campaign with priors (feasibility-first)."
+    )
+    p.add_argument("--seeds", help="Comma list or ranges, e.g. 1,2,5-8")
+    p.add_argument("--iterations", type=int, help="Iterations per seed")
+    p.add_argument("--workers", type=int, help="Parallel worker count")
+    p.add_argument("--data-path", help="Path to design_space.xlsx or .csv")
+    p.add_argument("--results-dir", help="Directory for results CSVs")
+    p.add_argument("--plots-dir", help="Base directory for per-seed plots")
+    p.add_argument("--density-thresh", type=float, help="Density threshold")
+    p.add_argument("--ys-thresh", type=float, help="Yield strength threshold")
+    p.add_argument("--pugh-thresh", type=float, help="Pugh ratio threshold")
+    p.add_argument("--st-thresh", type=float, help="Solidus temperature threshold")
+    p.add_argument("--vec-thresh", type=float, help="VEC threshold for BCC prior")
+    return p
+
+def main() -> None:
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+    seeds, iterations, workers = _configure_from_args(args)
+
     print(f"[main] Launching {len(seeds)} seeds with {workers} workers...")
 
     os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -636,3 +707,6 @@ if __name__ == "__main__":
             s = fut.result()
             print(f"[main] seed {s} finished.")
     print("[main] All seeds done.")
+
+if __name__ == "__main__":
+    main()
